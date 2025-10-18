@@ -1,17 +1,21 @@
 package main
 
 import (
+	"github.com/pulumi/pulumi-azure-native-sdk"
 	containerservice "github.com/pulumi/pulumi-azure-native-sdk/containerservice/v20230102preview"
 	resources "github.com/pulumi/pulumi-azure-native-sdk/resources/v2/v20241101"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
+
+var resourceGroupName string = "rg1"
+var resourceGroupLocation string = "westus"
 
 func main() {
 	//Run resource creation
 	pulumi.Run(func(ctx *pulumi.Context) error {
 
 		//Call the resource group creation function
-		_, err := createResourceGroup(ctx, "my-resource-group", "eastus")
+		_, err := createResourceGroup(ctx, resourceGroupName, resourceGroupLocation)
 		if err != nil {
 			return err
 		}
@@ -19,7 +23,7 @@ func main() {
 		// You can now use rg.Name, rg.ID, etc. for other resources
 		//		ctx.Export("resourceGroupName", rg.Name)
 
-		vnet, err := NewVNet(ctx, "myVNet", pulumi.String("eastus"), rg)
+		vnet, err := NewVNet(ctx, "myVNet", pulumi.String(resourceGroupLocation), rg)
 		if err != nil {
 			return err
 		}
@@ -108,8 +112,8 @@ func createAKS(ctx *pulumi.Context) (*containerservice.ManagedCluster, error) {
 		},
 		AgentPoolProfiles: containerservice.ManagedClusterAgentPoolProfileArray{
 			&containerservice.ManagedClusterAgentPoolProfileArgs{
-				Count:              pulumi.Int(3),
-				EnableNodePublicIP: pulumi.Bool(true),
+				Count:              pulumi.Int(2),
+				EnableNodePublicIP: pulumi.Bool(false),
 				Mode:               pulumi.String(containerservice.AgentPoolModeSystem),
 				Name:               pulumi.String("nodepool1"),
 				OsType:             pulumi.String(containerservice.OSTypeLinux),
