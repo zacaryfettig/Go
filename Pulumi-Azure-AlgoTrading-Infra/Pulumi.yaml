@@ -1,0 +1,7 @@
+name: algotrading
+description: Azure Native AKS Deployment
+runtime: go
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: azure-go
