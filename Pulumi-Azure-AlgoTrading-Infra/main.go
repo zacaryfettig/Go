@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/pulumi/pulumi-azure-native-sdk"
 	containerservice "github.com/pulumi/pulumi-azure-native-sdk/containerservice/v20230102preview"
+	keyvault "github.com/pulumi/pulumi-azure-native-sdk/keyvault"
+	network "github.com/pulumi/pulumi-azure-native-sdk/network"
 	resources "github.com/pulumi/pulumi-azure-native-sdk/resources/v2/v20241101"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
@@ -15,15 +16,15 @@ func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
 
 		//Call the resource group creation function
-		_, err := createResourceGroup(ctx, resourceGroupName, resourceGroupLocation)
+		rg, err := createResourceGroup(ctx, resourceGroupName, resourceGroupLocation)
 		if err != nil {
 			return err
 		}
 
 		// You can now use rg.Name, rg.ID, etc. for other resources
-		//		ctx.Export("resourceGroupName", rg.Name)
+		ctx.Export("resourceGroupName", rg.Name)
 
-		vnet, err := NewVNet(ctx, "myVNet", pulumi.String(resourceGroupLocation), rg)
+		vnet, err := NewVNet(ctx, "myVNet", pulumi.String(resourceGroupLocation), rg.Name)
 		if err != nil {
 			return err
 		}
@@ -34,7 +35,13 @@ func main() {
 		}
 		ctx.Export("subnetID", subnet.ID())
 
-		cluster, err := createAKS(ctx)
+		_, err = createAKS(ctx, subnet.ID())
+		if err != nil {
+			return err
+		}
+
+		tenantID := pulumi.String("<your-tenant-id>")
+		_, err = createKeyVault(ctx, "vault90348503485", resourceGroupName, resourceGroupLocation, tenantID)
 		if err != nil {
 			return err
 		}
@@ -59,11 +66,12 @@ type VNet struct {
 	pulumi.CustomResourceState
 }
 
-func NewVNet(ctx *pulumi.Context, name string, location pulumi.StringInput, parent pulumi.Resource) (*VNet, error) {
+func NewVNet(ctx *pulumi.Context, name string, location pulumi.StringInput, rgName pulumi.StringInput) (*VNet, error) {
 	var vnet VNet
 
 	args := pulumi.Map{
-		"location": location,
+		"resourceGroupName": rgName,
+		"location":          location,
 		"addressSpace": pulumi.Map{
 			"addressPrefixes": pulumi.StringArray{
 				pulumi.String("10.0.0.0/16"),
@@ -71,7 +79,7 @@ func NewVNet(ctx *pulumi.Context, name string, location pulumi.StringInput, pare
 		},
 	}
 
-	err := ctx.RegisterResource("Microsoft.Network/virtualNetworks", name, args, &vnet, pulumi.Parent(parent))
+	err := ctx.RegisterResource("Microsoft.Network/virtualNetworks", name, args, &vnet)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +107,7 @@ func NewSubnet(ctx *pulumi.Context, name string, vnet *VNet, prefix string) (*Su
 }
 
 // createAKS provisions an Azure Kubernetes Service (AKS) cluster
-func createAKS(ctx *pulumi.Context) (*containerservice.ManagedCluster, error) {
+func createAKS(ctx *pulumi.Context, subnetID pulumi.StringInput) (*containerservice.ManagedCluster, error) {
 	cluster, err := containerservice.NewManagedCluster(ctx, "managedCluster", &containerservice.ManagedClusterArgs{
 		AddonProfiles: containerservice.ManagedClusterAddonProfileMap{
 			"azureKeyvaultSecretsProvider": &containerservice.ManagedClusterAddonProfileArgs{
@@ -110,6 +118,14 @@ func createAKS(ctx *pulumi.Context) (*containerservice.ManagedCluster, error) {
 				Enabled: pulumi.Bool(true),
 			},
 		},
+
+		// Enable Azure Disk CSI driver
+		StorageProfile: &containerservice.ManagedClusterStorageProfileArgs{
+			DiskCSIDriver: &containerservice.ManagedClusterStorageProfileDiskCSIDriverArgs{
+				Enabled: pulumi.Bool(true),
+			},
+		},
+
 		AgentPoolProfiles: containerservice.ManagedClusterAgentPoolProfileArray{
 			&containerservice.ManagedClusterAgentPoolProfileArgs{
 				Count:              pulumi.Int(2),
@@ -119,6 +135,7 @@ func createAKS(ctx *pulumi.Context) (*containerservice.ManagedCluster, error) {
 				OsType:             pulumi.String(containerservice.OSTypeLinux),
 				Type:               pulumi.String(containerservice.AgentPoolTypeVirtualMachineScaleSets),
 				VmSize:             pulumi.String("Standard_DS2_v2"),
+				VnetSubnetID:       subnetID,
 			},
 		},
 		AutoScalerProfile: &containerservice.ManagedClusterPropertiesAutoScalerProfileArgs{
@@ -140,7 +157,7 @@ func createAKS(ctx *pulumi.Context) (*containerservice.ManagedCluster, error) {
 				},
 			},
 		},
-		Location: pulumi.String("location1"),
+		Location: pulumi.String(resourceGroupLocation),
 		NetworkProfile: &containerservice.ContainerServiceNetworkProfileArgs{
 			LoadBalancerProfile: &containerservice.ManagedClusterLoadBalancerProfileArgs{
 				ManagedOutboundIPs: &containerservice.ManagedClusterLoadBalancerProfileManagedOutboundIPsArgs{
@@ -152,10 +169,11 @@ func createAKS(ctx *pulumi.Context) (*containerservice.ManagedCluster, error) {
 		},
 		ResourceGroupName: pulumi.String("rg1"),
 		ResourceName:      pulumi.String("clustername1"),
-		ServicePrincipalProfile: &containerservice.ManagedClusterServicePrincipalProfileArgs{
-			ClientId: pulumi.String("clientid"),
-			Secret:   pulumi.String("secret"),
+
+		Identity: &containerservice.ManagedClusterIdentityArgs{
+			Type: containerservice.ResourceIdentityTypeSystemAssigned,
 		},
+
 		Sku: &containerservice.ManagedClusterSKUArgs{
 			Name: pulumi.String("Basic"),
 			Tier: pulumi.String(containerservice.ManagedClusterSKUTierFree),
@@ -174,4 +192,82 @@ func createAKS(ctx *pulumi.Context) (*containerservice.ManagedCluster, error) {
 	}
 
 	return cluster, nil
+}
+
+func createKeyVault(ctx *pulumi.Context, vaultName, resourceGroupName, location string, subnetID pulumi.StringInput) (*keyvault.Vault, error) {
+	tenantID := pulumi.String("<your-tenant-id>")
+
+	// Create Key Vault
+	vault, err := keyvault.NewVault(ctx, vaultName, &keyvault.VaultArgs{
+		ResourceGroupName: pulumi.String(resourceGroupName),
+		VaultName:         pulumi.String(vaultName),
+		Location:          pulumi.String(location),
+		Properties: &keyvault.VaultPropertiesArgs{
+			TenantId: tenantID,
+			Sku: &keyvault.SkuArgs{
+				Name:   keyvault.SkuNameStandard,
+				Family: pulumi.String(keyvault.SkuFamilyA),
+			},
+			AccessPolicies: keyvault.AccessPolicyEntryArray{
+				&keyvault.AccessPolicyEntryArgs{
+					TenantId: tenantID,
+					ObjectId: pulumi.String("<your-object-id>"),
+					Permissions: &keyvault.PermissionsArgs{
+						Keys: pulumi.StringArray{
+							pulumi.String("get"),
+							pulumi.String("list"),
+							pulumi.String("create"),
+							pulumi.String("delete"),
+						},
+						Secrets: pulumi.StringArray{
+							pulumi.String("get"),
+							pulumi.String("list"),
+							pulumi.String("set"),
+							pulumi.String("delete"),
+						},
+						Certificates: pulumi.StringArray{
+							pulumi.String("get"),
+							pulumi.String("list"),
+							pulumi.String("create"),
+							pulumi.String("delete"),
+						},
+					},
+				},
+			},
+			EnabledForDeployment:         pulumi.Bool(true),
+			EnabledForTemplateDeployment: pulumi.Bool(true),
+			EnabledForDiskEncryption:     pulumi.Bool(true),
+			NetworkAcls: &keyvault.NetworkRuleSetArgs{
+				DefaultAction: pulumi.String("Deny"),
+				Bypass:        pulumi.String("AzureServices"),
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Create Private Endpoint Key Vault
+	_, err = network.NewPrivateEndpoint(ctx, vaultName+"-pe", &network.PrivateEndpointArgs{
+		ResourceGroupName: pulumi.String(resourceGroupName),
+		Location:          pulumi.String(location),
+		Subnet: &network.SubnetTypeArgs{
+			Id: subnetID,
+		},
+
+		PrivateLinkServiceConnections: network.PrivateLinkServiceConnectionArray{
+			&network.PrivateLinkServiceConnectionArgs{
+				Name:                 pulumi.String("kv-connection"),
+				PrivateLinkServiceId: vault.ID(),
+				GroupIds: pulumi.StringArray{
+					pulumi.String("vault"),
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return vault, nil
 }
