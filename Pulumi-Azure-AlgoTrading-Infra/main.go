@@ -41,7 +41,9 @@ func main() {
 		}
 
 		tenantID := pulumi.String("<your-tenant-id>")
-		_, err = createKeyVault(ctx, "vault90348503485", resourceGroupName, resourceGroupLocation, tenantID)
+		subnetID := subnet.ID() // from your existing subnet
+
+		_, err = createKeyVault(ctx, "vault90348503485", resourceGroupName, resourceGroupLocation, tenantID, subnetID)
 		if err != nil {
 			return err
 		}
@@ -194,8 +196,7 @@ func createAKS(ctx *pulumi.Context, subnetID pulumi.StringInput) (*containerserv
 	return cluster, nil
 }
 
-func createKeyVault(ctx *pulumi.Context, vaultName, resourceGroupName, location string, subnetID pulumi.StringInput) (*keyvault.Vault, error) {
-	tenantID := pulumi.String("<your-tenant-id>")
+func createKeyVault(ctx *pulumi.Context, vaultName, resourceGroupName, location string, tenantID pulumi.StringInput, subnetID pulumi.StringInput) (*keyvault.Vault, error) {
 
 	// Create Key Vault
 	vault, err := keyvault.NewVault(ctx, vaultName, &keyvault.VaultArgs{
@@ -257,7 +258,7 @@ func createKeyVault(ctx *pulumi.Context, vaultName, resourceGroupName, location 
 
 		PrivateLinkServiceConnections: network.PrivateLinkServiceConnectionArray{
 			&network.PrivateLinkServiceConnectionArgs{
-				Name:                 pulumi.String("kv-connection"),
+				Name:                 pulumi.String("kv-endpoint-connection"),
 				PrivateLinkServiceId: vault.ID(),
 				GroupIds: pulumi.StringArray{
 					pulumi.String("vault"),
