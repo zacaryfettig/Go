@@ -8,33 +8,34 @@ import (
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
 
+// Resource Group Variables
 var resourceGroupName string = "rg1"
 var resourceGroupLocation string = "westus"
 
 func main() {
-	//Run resource creation
 	pulumi.Run(func(ctx *pulumi.Context) error {
 
-		//Call the resource group creation function
+		//Calling the createResourceGroup function to create a new Resource Group
 		rg, err := createResourceGroup(ctx, resourceGroupName, resourceGroupLocation)
 		if err != nil {
 			return err
 		}
 
-		// You can now use rg.Name, rg.ID, etc. for other resources
 		ctx.Export("resourceGroupName", rg.Name)
 
-		vnet, err := NewVNet(ctx, "myVNet", pulumi.String(resourceGroupLocation), rg.Name)
+		//Calling the NewSubnet function to create a new subnet
+		vnet, err := NewVNet(ctx, "NodeVnet", pulumi.String(resourceGroupLocation), rg.Name)
 		if err != nil {
 			return err
 		}
-
-		subnet, err := NewSubnet(ctx, "subnet1", vnet, "10.10.10.0/24")
+		//Calling the NewVNet function to create a new virtual network
+		subnet, err := NewSubnet(ctx, "NodeSubnet", vnet, "10.10.10.0/24")
 		if err != nil {
 			return err
 		}
 		ctx.Export("subnetID", subnet.ID())
 
+		//Create new AKS Cluster
 		_, err = createAKS(ctx, subnet.ID())
 		if err != nil {
 			return err
@@ -43,6 +44,7 @@ func main() {
 		tenantID := pulumi.String("<your-tenant-id>")
 		subnetID := subnet.ID() // from your existing subnet
 
+		//create KeyVault
 		_, err = createKeyVault(ctx, "vault90348503485", resourceGroupName, resourceGroupLocation, tenantID, subnetID)
 		if err != nil {
 			return err
@@ -68,6 +70,7 @@ type VNet struct {
 	pulumi.CustomResourceState
 }
 
+// New Virtual Network Function
 func NewVNet(ctx *pulumi.Context, name string, location pulumi.StringInput, rgName pulumi.StringInput) (*VNet, error) {
 	var vnet VNet
 
@@ -93,6 +96,7 @@ type Subnet struct {
 	pulumi.CustomResourceState
 }
 
+// New subnet function
 func NewSubnet(ctx *pulumi.Context, name string, vnet *VNet, prefix string) (*Subnet, error) {
 	var subnet Subnet
 
@@ -108,7 +112,7 @@ func NewSubnet(ctx *pulumi.Context, name string, vnet *VNet, prefix string) (*Su
 	return &subnet, nil
 }
 
-// createAKS provisions an Azure Kubernetes Service (AKS) cluster
+// createAKS creates a new Azure AKS Cluster
 func createAKS(ctx *pulumi.Context, subnetID pulumi.StringInput) (*containerservice.ManagedCluster, error) {
 	cluster, err := containerservice.NewManagedCluster(ctx, "managedCluster", &containerservice.ManagedClusterArgs{
 		AddonProfiles: containerservice.ManagedClusterAddonProfileMap{
@@ -196,9 +200,9 @@ func createAKS(ctx *pulumi.Context, subnetID pulumi.StringInput) (*containerserv
 	return cluster, nil
 }
 
+// Function creates new KeyVault
 func createKeyVault(ctx *pulumi.Context, vaultName, resourceGroupName, location string, tenantID pulumi.StringInput, subnetID pulumi.StringInput) (*keyvault.Vault, error) {
 
-	// Create Key Vault
 	vault, err := keyvault.NewVault(ctx, vaultName, &keyvault.VaultArgs{
 		ResourceGroupName: pulumi.String(resourceGroupName),
 		VaultName:         pulumi.String(vaultName),
